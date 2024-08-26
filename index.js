@@ -1,6 +1,7 @@
 const express = require("express");
 const swaggerjsdoc = require("swagger-jsdoc");
 const swaggerui = require("swagger-ui-express");
+const registerroutes = require("./routes/register")
 
 const app = express();
 
@@ -14,8 +15,7 @@ const options = {
     info: {
       title: "Rest API Auth",
       version: "1.0",
-      description:
-        "REST API authentication and authorization with Node.js, using JSON Web Tokens (JWT), Refresh Tokens and Two-Factor Authentication (2FA)",
+      description: "A simple Express Auth API",
     },
     servers: [
       {
@@ -23,7 +23,7 @@ const options = {
       },
     ],
   },
-  apis: ["*./"],
+  apis: ["./routes/*.js"],
 };
 
 app.get("/", (req, res) => {
@@ -32,4 +32,7 @@ app.get("/", (req, res) => {
 
 const specs = swaggerjsdoc(options);
 app.use("/api-docs", swaggerui.serve, swaggerui.setup(specs));
+
+app.use("/", registerroutes);
+
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
