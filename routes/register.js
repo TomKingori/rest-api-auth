@@ -1,9 +1,9 @@
 const express = require("express");
-const Datastore = require('nedb-promises')
-const bcrypt = require('bcryptjs')
+const Datastore = require("nedb-promises");
+const bcrypt = require("bcryptjs");
 const router = express.Router();
 
-const users = Datastore.create('Users.db')
+const users = Datastore.create("Users.db");
 
 /**
  * @swagger
@@ -39,26 +39,35 @@ const users = Datastore.create('Users.db')
  *         description: Some server error
  */
 
-router.post('/register', async (req, res) => {
-    try {
-        const {name, email, password} = req.body
-        if(!name || !email || !password){
-            return res.status(422).json({message: "Please fill in all fields (name, email and password)"})
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10)
-
-        const newUser = await users.insert({
-            name: name,
-            email: email,
-            password: hashedPassword
-        })
-
-        return res.status(201).json({message: 'User registered successfully'})
-
-    } catch (error) {
-        return res.status(500).json({message: error.message})
+router.post("/register", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res
+        .status(422)
+        .json({
+          message: "Please fill in all fields (name, email and password)",
+        });
     }
-})
+
+    if(await users.findOne({email: email})){
+        return res.status(409).json({message: `User with email ${email} exists`})
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = await users.insert({
+      name: name,
+      email: email,
+      password: hashedPassword,
+    });
+
+    return res
+      .status(201)
+      .json({ message: "User registered successfully", id: newUser._id });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
 
 module.exports = router;
