@@ -28,10 +28,15 @@ const users = Datastore.create("Users.db");
  *               password:
  *                 type: string
  *                 description: The user's password
+ *               role:
+ *                 type: string
+ *                 description: The user's role (admin or member)
+ *                 example: "admin"
  *           example:
  *             name: "Tom"
  *             email: "tom@gmail.com"
  *             password: "test321"
+ *             role: "admin"
  *     responses:
  *       201:
  *         description: User registered successfully
@@ -40,10 +45,9 @@ const users = Datastore.create("Users.db");
  *       500:
  *         description: Some server error
  */
-
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, role } = req.body;
     if (!name || !email || !password) {
       return res.status(422).json({
         message: "Please fill in all fields (name, email and password)",
@@ -62,6 +66,7 @@ router.post("/register", async (req, res) => {
       name: name,
       email: email,
       password: hashedPassword,
+      role: role?.trim() || "member",
     });
 
     return res
@@ -71,7 +76,6 @@ router.post("/register", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 });
-
 
 /**
  * @swagger
@@ -97,64 +101,13 @@ router.post("/register", async (req, res) => {
  *     responses:
  *       200:
  *         description: User logged in successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "User logged in successfully"
- *                 id:
- *                   type: string
- *                   description: The user's ID
- *                   example: "60c72b2f5f1b2c001c8e4a4b"
- *                 name:
- *                   type: string
- *                   description: The user's name
- *                   example: "Tom"
- *                 email:
- *                   type: string
- *                   description: The user's email
- *                   example: "tom@gmail.com"
- *                 accessToken:
- *                   type: string
- *                   description: JWT access token
- *                   example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2MGM3MmIyZjVmMWIyYzAwMWM4ZTRhNGIiLCJzdWIiOiJhY2Nlc3NBcGkiLCJleHAiOjE2MzU3NTI0MDB9._1bCmxNxe5x6Pfxt5PjKzLwEtAYN9eI8mQUG"
  *       401:
  *         description: Unauthorized - Invalid email or password
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Email is invalid" 
  *       422:
  *         description: Missing required fields
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Please fill in all fields (email and password)"
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Some server error message"
  */
-
-
-
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -185,8 +138,8 @@ router.post("/login", async (req, res) => {
       id: user._id,
       name: user.name,
       email: user.email,
-      accessToken
-    })
+      accessToken,
+    });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -202,72 +155,97 @@ router.post("/login", async (req, res) => {
  *     responses:
  *       200:
  *         description: User verification successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: string
- *                   description: The user's ID
- *                   example: "60c72b2f5f1b2c001c8e4a4b"
- *                 name:
- *                   type: string
- *                   description: The user's name
- *                   example: "Tom"
- *                 email:
- *                   type: string
- *                   description: The user's email
- *                   example: "tom@gmail.com"
  *       401:
  *         description: Unauthorized - Access token not found, invalid, or expired
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Access token not found" 
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Some server error message"
  */
-
-router.get('/verify-login', verifyAuthentication, async (req, res) => {
+router.get("/verify-login", verifyAuthentication, async (req, res) => {
   try {
-    const user = await users.findOne({_id: req.user.id})
+    const user = await users.findOne({ _id: req.user.id });
     return res.status(200).json({
       id: user._id,
       name: user.name,
-      email: user.email
-    })
-
+      email: user.email,
+    });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
-})
+});
 
-async function verifyAuthentication(req, res, next){
-  const accessToken = req.headers.authorization?.split(' ')[1];
-  if(!accessToken){
-    return res.status(401).json({message: "Access token not found"});
+/**
+ * @swagger
+ * /admin:
+ *   get:
+ *     summary: Admin access only route
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Admin access granted
+ *       403:
+ *         description: Forbidden - Access denied
+ *       500:
+ *         description: Internal server error
+ */
+router.get(
+  "/admin",
+  verifyAuthentication,
+  authorize(["admin"]),
+  async (req, res) => {
+    return res.status(200).json({ message: "Admin access only route" });
+  }
+);
+
+/**
+ * @swagger
+ * /member:
+ *   get:
+ *     summary: Admin and member access only route
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Member access granted
+ *       403:
+ *         description: Forbidden - Access denied
+ *       500:
+ *         description: Internal server error
+ */
+router.get(
+  "/member",
+  verifyAuthentication,
+  authorize(["admin", "member"]),
+  async (req, res) => {
+    return res
+      .status(200)
+      .json({ message: "Admin and member access only route" });
+  }
+);
+
+async function verifyAuthentication(req, res, next) {
+  const accessToken = req.headers.authorization?.split(" ")[1];
+  if (!accessToken) {
+    return res.status(401).json({ message: "Access token not found" });
   }
   try {
     const decodedAccessToken = jwt.verify(accessToken, accessTokenSecret);
-    req.user = {id: decodedAccessToken.userId};
+    req.user = { id: decodedAccessToken.userId };
     next();
   } catch (error) {
-    return res.status(401).json({message: 'Access token invalid or expired'});
+    return res.status(401).json({ message: "Access token invalid or expired" });
   }
 }
 
+function authorize(roles = []) {
+  return async function (req, res, next) {
+    const user = await users.findOne({ _id: req.user.id });
+
+    if (!user || !roles.includes(user.role)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    next();
+  };
+}
 
 module.exports = router;
