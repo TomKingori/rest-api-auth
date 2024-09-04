@@ -1,3 +1,4 @@
 node_modules
 Users.db
 UserRefreshTokens.db
+UserInvalidTokens.db

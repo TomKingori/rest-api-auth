@@ -1,6 +1,6 @@
 module.exports = {
     accessTokenSecret: 'myAccessTokenSecret',
-    accessTokenExpiresIn: '30s',
+    accessTokenExpiresIn: '30m',
     refreshTokenSecret: 'myRefreshTokenSecret',
-    refreshTokenExpiresIn: '2m'
+    refreshTokenExpiresIn: '1w'
 }

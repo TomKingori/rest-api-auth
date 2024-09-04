@@ -7,6 +7,7 @@ const router = express.Router();
 
 const users = Datastore.create("Users.db");
 const userRefreshTokens = Datastore.create("UserRefreshTokens.db");
+const userInvalidTokens = Datastore.create("userInvalidTokens.db")
 
 /**
  * @swagger
@@ -282,6 +283,39 @@ router.post("/refresh-token", async (req, res) => {
 
 /**
  * @swagger
+ * /logout:
+ *   get:
+ *     summary: Log out the user
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       204:
+ *         description: User logged out successfully
+ *       401:
+ *         description: Unauthorized - Access token not found or invalid
+ *       500:
+ *         description: Internal server error
+ */
+
+router.post('/logout', verifyAuthentication, async(req, res)=>{
+  try {
+    await userRefreshTokens.removeMany({userId: req.user.id})
+    await userRefreshTokens.compactDatafile()
+
+    await userInvalidTokens.insert({
+      accessToken: req.accessToken.value,
+      userId: req.user.id,
+      expirationTime: req.accessToken.exp
+    })
+
+    return res.status(204).send()
+  } catch (error) {
+    return res.status(500).json({message: error.message})
+  }
+})
+
+/**
+ * @swagger
  * /admin:
  *   get:
  *     summary: Admin access only route
@@ -330,17 +364,29 @@ router.get(
   }
 );
 
+
+
 async function verifyAuthentication(req, res, next) {
   const accessToken = req.headers.authorization?.split(" ")[1];
   if (!accessToken) {
     return res.status(401).json({ message: "Access token not found" });
   }
+  if (await userInvalidTokens.findOne({accessToken})){
+    return res.status(401).json({message: "Access token invalid", code: 'AccessTokenInvalid'})
+  }
   try {
     const decodedAccessToken = jwt.verify(accessToken, accessTokenSecret);
+    req.accessToken = { value:accessToken, exp:decodedAccessToken.exp }
     req.user = { id: decodedAccessToken.userId };
     next();
   } catch (error) {
-    return res.status(401).json({ message: "Access token invalid or expired" });
+    if(error instanceof jwt.TokenExpiredError){
+      return res.status(401).json({ message: "Access token expired", code: "AccessTokenExpired" });
+    } else if (error instanceof jwt.JsonWebTokenError){
+      return res.status(401).json({message: "Access token invalid", code: 'AccessTokenInvalid'})
+    }else{
+      return res.status(500).json({ message: error.message });
+    }
   }
 }
 
