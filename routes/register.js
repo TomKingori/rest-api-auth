@@ -2,12 +2,20 @@ const express = require("express");
 const Datastore = require("nedb-promises");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { accessTokenSecret, refreshTokenSecret, accessTokenExpiresIn, refreshTokenExpiresIn } = require("../config");
+const {
+  accessTokenSecret,
+  refreshTokenSecret,
+  accessTokenExpiresIn,
+  refreshTokenExpiresIn,
+} = require("../config");
+const { authenticator } = require("otplib");
+const qrcode = require('qrcode')
+
 const router = express.Router();
 
 const users = Datastore.create("Users.db");
 const userRefreshTokens = Datastore.create("UserRefreshTokens.db");
-const userInvalidTokens = Datastore.create("userInvalidTokens.db")
+const userInvalidTokens = Datastore.create("userInvalidTokens.db");
 
 /**
  * @swagger
@@ -69,6 +77,8 @@ router.post("/register", async (req, res) => {
       email: email,
       password: hashedPassword,
       role: role?.trim() || "member",
+      '2faEnable': false,
+      '2faSecret': null,
     });
 
     return res
@@ -241,24 +251,32 @@ router.post("/refresh-token", async (req, res) => {
       userId: decodedRefreshToken.userId,
     });
 
-    if(!userRefreshToken){
+    if (!userRefreshToken) {
       return res
         .status(401)
         .json({ message: "Refresh token invalid or expired" });
     }
 
-    await userRefreshTokens.remove({_id: userRefreshTokens._id})
-    await userRefreshTokens.compactDatafile()
+    await userRefreshTokens.remove({ _id: userRefreshTokens._id });
+    await userRefreshTokens.compactDatafile();
 
-    const accessToken = jwt.sign({ userId: decodedRefreshToken.userId }, accessTokenSecret, {
-      subject: "accessApi",
-      expiresIn: accessTokenExpiresIn,
-    });
+    const accessToken = jwt.sign(
+      { userId: decodedRefreshToken.userId },
+      accessTokenSecret,
+      {
+        subject: "accessApi",
+        expiresIn: accessTokenExpiresIn,
+      }
+    );
 
-    const newRefreshToken = jwt.sign({ userId: decodedRefreshToken.userId }, refreshTokenSecret, {
-      subject: "refreshToken",
-      expiresIn: refreshTokenExpiresIn,
-    });
+    const newRefreshToken = jwt.sign(
+      { userId: decodedRefreshToken.userId },
+      refreshTokenSecret,
+      {
+        subject: "refreshToken",
+        expiresIn: refreshTokenExpiresIn,
+      }
+    );
 
     await userRefreshTokens.insert({
       refreshToken: newRefreshToken,
@@ -281,6 +299,106 @@ router.post("/refresh-token", async (req, res) => {
   }
 });
 
+
+/**
+ * @swagger
+ * /2fa/generate:
+ *   get:
+ *     summary: Generate a QR code for enabling two-factor authentication
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Two-factor authentication secret and QR code generated successfully
+ *         content:
+ *           image/png:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *               description: A QR code image in PNG format
+ *       401:
+ *         description: Unauthorized - Access token not found or invalid
+ *       500:
+ *         description: Internal server error
+ */
+
+router.get("/2fa/generate", verifyAuthentication, async (req, res) => {
+  try {
+    const user = await users.findOne({ _id: req.user.id });
+    
+    const secret = authenticator.generateSecret()
+    const uri = authenticator.keyuri(user.email, 'tomking.io', secret)
+
+    await users.update({_id: req.user.id}, {$set: {'2faSecret': secret}})
+    await users.compactDatafile()
+
+    const qrCode = await qrcode.toBuffer(uri, { type: 'image/png', margin: 1})
+
+    res.setHeader('Content-Disposition', 'attachment; filename=qrcode.png' )
+    return res.status(200).type('image/png').send(qrCode)
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /2fa/validate:
+ *   post:
+ *     summary: Validate the user's TOTP to enable two-factor authentication
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               totp:
+ *                 type: string
+ *                 description: The Time-based One-Time Password (TOTP) from the authenticator app
+ *             example:
+ *               totp: "123456"
+ *     responses:
+ *       200:
+ *         description: TOTP validated successfully
+ *       400:
+ *         description: Bad Request - TOTP is incorrect or expired
+ *       422:
+ *         description: Unprocessable Entity - TOTP is required
+ *       401:
+ *         description: Unauthorized - Access token not found or invalid
+ *       500:
+ *         description: Internal Server Error
+ */
+
+router.post('/2fa/validate', verifyAuthentication, async(req, res)=>{
+  try {
+    const {totp} = req.body
+    
+    if (!totp){
+      return res.status(422).json({message: 'TOTP is required'})
+    }
+
+    const user = await users.findOne({_id: req.user.id})
+
+    const verified = authenticator.check(totp, user['2faSecret'])
+
+    if(!verified){
+      return res.status(400).json({message: 'TOTP is not correct or expired'})
+    }
+
+    await users.update({_id: req.user.id}, {$set: {'2faEnable':true}})
+    await users.compactDatafile()
+
+    return res.status(200).json({message: 'TOTP validated successfully'})
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+})
+
+
 /**
  * @swagger
  * /logout:
@@ -297,22 +415,22 @@ router.post("/refresh-token", async (req, res) => {
  *         description: Internal server error
  */
 
-router.post('/logout', verifyAuthentication, async(req, res)=>{
+router.post("/logout", verifyAuthentication, async (req, res) => {
   try {
-    await userRefreshTokens.removeMany({userId: req.user.id})
-    await userRefreshTokens.compactDatafile()
+    await userRefreshTokens.removeMany({ userId: req.user.id });
+    await userRefreshTokens.compactDatafile();
 
     await userInvalidTokens.insert({
       accessToken: req.accessToken.value,
       userId: req.user.id,
-      expirationTime: req.accessToken.exp
-    })
+      expirationTime: req.accessToken.exp,
+    });
 
-    return res.status(204).send()
+    return res.status(204).send();
   } catch (error) {
-    return res.status(500).json({message: error.message})
+    return res.status(500).json({ message: error.message });
   }
-})
+});
 
 /**
  * @swagger
@@ -364,27 +482,31 @@ router.get(
   }
 );
 
-
-
 async function verifyAuthentication(req, res, next) {
   const accessToken = req.headers.authorization?.split(" ")[1];
   if (!accessToken) {
     return res.status(401).json({ message: "Access token not found" });
   }
-  if (await userInvalidTokens.findOne({accessToken})){
-    return res.status(401).json({message: "Access token invalid", code: 'AccessTokenInvalid'})
+  if (await userInvalidTokens.findOne({ accessToken })) {
+    return res
+      .status(401)
+      .json({ message: "Access token invalid", code: "AccessTokenInvalid" });
   }
   try {
     const decodedAccessToken = jwt.verify(accessToken, accessTokenSecret);
-    req.accessToken = { value:accessToken, exp:decodedAccessToken.exp }
+    req.accessToken = { value: accessToken, exp: decodedAccessToken.exp };
     req.user = { id: decodedAccessToken.userId };
     next();
   } catch (error) {
-    if(error instanceof jwt.TokenExpiredError){
-      return res.status(401).json({ message: "Access token expired", code: "AccessTokenExpired" });
-    } else if (error instanceof jwt.JsonWebTokenError){
-      return res.status(401).json({message: "Access token invalid", code: 'AccessTokenInvalid'})
-    }else{
+    if (error instanceof jwt.TokenExpiredError) {
+      return res
+        .status(401)
+        .json({ message: "Access token expired", code: "AccessTokenExpired" });
+    } else if (error instanceof jwt.JsonWebTokenError) {
+      return res
+        .status(401)
+        .json({ message: "Access token invalid", code: "AccessTokenInvalid" });
+    } else {
       return res.status(500).json({ message: error.message });
     }
   }
